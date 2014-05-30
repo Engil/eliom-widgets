@@ -27,7 +27,7 @@ CLIENT_FILES_DOC := $(wildcard \
 # OCamlfind packages for the server
 SERVER_PACKAGES := text
 # OCamlfind packages for the client
-CLIENT_PACKAGES := ojwidgets
+CLIENT_PACKAGES := ojwidgets diff_match_patch
 
 # Native mode (yes/no): Compile also with native mode (it will always compile with byte mode)
 NATIVE := yes
