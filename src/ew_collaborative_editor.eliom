@@ -15,13 +15,27 @@ type bus_message =
   | Patch of (int * diff * int)
   | Hello of int
         deriving(Json)
+
 }}
 {server{
+
 type patch_result = Failure of string
                   | Success of string
 
-let patches_bus = Eliom_bus.create
-    ~scope:Eliom_common.site_scope Json.t<bus_message>
+
+type response =
+  | Applied of int
+  | Rejected of (int * string) array list
+
+
+type revision = {id : int; text : string }
+
+
+let init_collaborative_editor ~name =
+  let patches_bus = Eliom_bus.create
+      ~scope:Eliom_common.site_scope Json.t<bus_message>
+  in
+
 
 let insert_at text str id =
   try
@@ -32,6 +46,7 @@ let insert_at text str id =
     end
   with
   | _ -> Failure "Error while inserting text"
+
 
 let apply_deletion text str i =
   try
@@ -49,10 +64,12 @@ let apply_deletion text str i =
   with
   | Invalid_argument _ -> false
 
+
 let apply_addition text str i =
   match insert_at !text str i with
   | Success str -> text := str; true
   | Failure _ -> false
+
 
 let check_coherence i s text =
   try
@@ -61,6 +78,7 @@ let check_coherence i s text =
     chunk = s
   with
   | Invalid_argument _ -> false
+
 
 let apply_diffs text diffs =
   let rtext = ref text in
@@ -73,7 +91,7 @@ let apply_diffs text diffs =
       else
           Failure "Impossible to delete chunk"
     | (0, str)::xs -> if check_coherence i str !rtext then inner xs (i + (String.length str))
-      else Failure "Retain don't match :'"
+      else Failure "Retain don't match"
     | (1, str)::xs ->
       if apply_addition rtext str i then
         inner xs (i + (String.length str))
@@ -83,13 +101,6 @@ let apply_diffs text diffs =
   in inner diffs 0
 
 
-open Lwt
-type response =
-  | Applied of int
-  | Rejected of (int * string) array list
-
-type revision = {id : int; text : string }
-
 let (append_shadowcopies, get_shadowcopies) =
   let default_value = [{id = 0; text = ""}] in
   let eref = Eliom_reference.eref ~scope:Eliom_common.site_scope default_value in
@@ -97,6 +108,7 @@ let (append_shadowcopies, get_shadowcopies) =
   ((fun elm -> get eref
      >>= fun shdwcopies -> Eliom_reference.set eref (elm::shdwcopies)),
   (fun () -> get eref))
+
 
 let handle_patch_request (request : request) =
   let verify_patch cscopy oscopies =
@@ -120,8 +132,10 @@ let handle_patch_request (request : request) =
   | [] -> Lwt.return (`Refused (0, ""))
   | x::xs -> verify_patch x xs
 
+
 let main_service =
   Eliom_service.App.service ~path:[] ~get_params:Eliom_parameter.unit ()
+
 
 let get_document =
   Eliom_service.Ocaml.coservice'
@@ -129,13 +143,12 @@ let get_document =
     ~get_params: (Eliom_parameter.string "document")
     ()
 
-}}
-{server{
 
 let content =
   Html5.F.(
     div ~a:[a_contenteditable true; a_id "editor"]
       [span []])
+
 
 let send_patch =
   Eliom_service.Ocaml.post_coservice'
@@ -150,19 +163,16 @@ let send_patch =
 
 {client{
 
-let print_diffs diffs =
-  Array.iter (fun (i, s) -> Eliom_lib.debug "DIFF DUMP: op = %d - chaine = %s\n" i s) diffs
-
 module Html = Dom_html
+let (>>=) = Lwt.bind
+open Dom
+
 
 type phase =
   | Init of (int * diff * int) list
   | Ok of (int * diff * int) list
   | Disconnected
 
-let (>>=) = Lwt.bind
-
-open Dom
 
 let load_document editor old rev =
   Eliom_client.call_ocaml_service ~service:%get_document "toto" ()
@@ -176,10 +186,12 @@ let load_document editor old rev =
     | `NotConnected -> Lwt.return_unit
   end
 
+
 let make_diff text old_text rev client_id =
   let dmp = DiffMatchPatch.make () in
   let diff = DiffMatchPatch.diff_main dmp old_text text in
   {from_revision = rev; diffs = (Array.to_list diff); client = client_id;}
+
 
 let get_editor _ = Js.Opt.get (Html.document##getElementById
                                  (Js.string "editor")) (fun () -> assert false)
@@ -196,6 +208,7 @@ let apply_patches rev editor shadow_copy patches =
         shadow_copy := Js.string @@ DiffMatchPatch.patch_apply
             dmp patch_scopy (Js.to_string !shadow_copy);
         rev := prev) (List.rev patches)
+
 
 let onload _ =
   Random.self_init ();
