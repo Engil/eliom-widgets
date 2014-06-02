@@ -302,6 +302,4 @@ let onload _ =
              end
           )))
 
-let _ = Eliom_client.onload @@ fun () -> onload ()
-
 }}
