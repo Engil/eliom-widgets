@@ -143,13 +143,6 @@ let get_document =
     ~get_params: (Eliom_parameter.string "document")
     ()
 
-
-let content =
-  Html5.F.(
-    div ~a:[a_contenteditable true; a_id "editor"]
-      [span []])
-
-
 let send_patch =
   Eliom_service.Ocaml.post_coservice'
     ~rt:(Eliom_service.rt :
@@ -157,7 +150,6 @@ let send_patch =
              Eliom_service.rt)
     ~post_params: (Eliom_parameter.ocaml "lol" Json.t<request>)
     ()
-
 
 }}
 
