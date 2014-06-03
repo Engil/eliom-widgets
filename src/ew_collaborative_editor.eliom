@@ -17,25 +17,17 @@ type bus_message =
         deriving(Json)
 
 }}
+
 {server{
 
 type patch_result = Failure of string
                   | Success of string
 
-
 type response =
   | Applied of int
   | Rejected of (int * string) array list
 
-
 type revision = {id : int; text : string }
-
-
-let init_collaborative_editor ~name =
-  let patches_bus = Eliom_bus.create
-      ~scope:Eliom_common.site_scope Json.t<bus_message>
-  in
-
 
 let insert_at text str id =
   try
@@ -101,16 +93,8 @@ let apply_diffs text diffs =
   in inner diffs 0
 
 
-let (append_shadowcopies, get_shadowcopies) =
-  let default_value = [{id = 0; text = ""}] in
-  let eref = Eliom_reference.eref ~scope:Eliom_common.site_scope default_value in
-  let get = Eliom_reference.get in
-  ((fun elm -> get eref
-     >>= fun shdwcopies -> Eliom_reference.set eref (elm::shdwcopies)),
-  (fun () -> get eref))
 
-
-let handle_patch_request (request : request) =
+let handle_patch_request get_copy append_copy bus (request : request) =
   let verify_patch cscopy oscopies =
     let cid, ctext = cscopy.id, cscopy.text in
     let rid, rdiffs, ruid = request.from_revision, request.diffs, request.client in
@@ -120,35 +104,30 @@ let handle_patch_request (request : request) =
         begin
           let ncopy = { id = cid + 1;
                         text = ntext; } in
-          ignore(append_shadowcopies ncopy);
-          ignore(Eliom_bus.write patches_bus (Patch (ruid, (Array.of_list rdiffs), (cid + 1))));
+          ignore(append_copy ncopy);
+          ignore(Eliom_bus.write bus (Patch (ruid, (Array.of_list rdiffs), (cid + 1))));
           Lwt.return (`Applied (cid + 1, ntext))
         end
       else begin Lwt.return (`Refused (cid, ctext)) end
   in
-  get_shadowcopies ()
+  get_copy ()
   >>= fun scopies ->
   match scopies with
   | [] -> Lwt.return (`Refused (0, ""))
   | x::xs -> verify_patch x xs
 
-
-let main_service =
-  Eliom_service.App.service ~path:[] ~get_params:Eliom_parameter.unit ()
-
-
-let get_document =
+let service_get_document =
   Eliom_service.Ocaml.coservice'
     ~rt:(Eliom_service.rt : [`Result of (string * int) | `NotConnected] Eliom_service.rt)
-    ~get_params: (Eliom_parameter.string "document")
+    ~get_params: (Eliom_parameter.unit)
     ()
 
-let send_patch =
+let service_send_patch =
   Eliom_service.Ocaml.post_coservice'
     ~rt:(Eliom_service.rt :
            [`Applied of int * string | `Refused of int * string]
              Eliom_service.rt)
-    ~post_params: (Eliom_parameter.ocaml "lol" Json.t<request>)
+    ~post_params: (Eliom_parameter.ocaml "param" Json.t<request>)
     ()
 
 }}
@@ -167,7 +146,7 @@ type phase =
 
 
 let load_document editor old rev =
-  Eliom_client.call_ocaml_service ~service:%get_document "toto" ()
+  Eliom_client.call_ocaml_service ~service:%service_get_document "toto" ()
   >>= fun response ->
   begin
     match response with
@@ -191,7 +170,6 @@ let get_editor _ = Js.Opt.get (Html.document##getElementById
 let apply_patches rev editor shadow_copy patches =
   List.iter (fun (id, diff, prev) ->
       if prev = !rev then
-        print_endline "lol";
         let dmp = DiffMatchPatch.make () in
         let patch_scopy = DiffMatchPatch.patch_make dmp (Js.to_string !shadow_copy) diff in
         let patch_editor = DiffMatchPatch.patch_make dmp (Js.to_string editor##innerHTML) diff in
@@ -202,7 +180,7 @@ let apply_patches rev editor shadow_copy patches =
         rev := prev) (List.rev patches)
 
 
-let onload _ =
+let onload patches_bus =
   Random.self_init ();
 
   (* Is the current revision server-side *)
@@ -271,8 +249,8 @@ let onload _ =
       end
     | _ -> ()
   )
-  (Eliom_bus.stream %patches_bus));
-  Eliom_bus.write %patches_bus (Hello (client_id));
+  (Eliom_bus.stream patches_bus));
+  Eliom_bus.write patches_bus (Hello (client_id));
 
   (* changes handler *)
   Lwt_js_events.(
@@ -284,7 +262,7 @@ let onload _ =
              let editor = get_editor () in
              let diff = make_diff (Js.to_string editor##innerHTML)
                  (Js.to_string !shadow_copy) !rev client_id in
-             Eliom_client.call_ocaml_service ~service:%send_patch () diff
+             Eliom_client.call_ocaml_service ~service:%service_send_patch () diff
              >>= fun response ->
              begin
                match response with
@@ -293,5 +271,47 @@ let onload _ =
                | `Refused (srev, scopy) -> Lwt.return ()
              end
           )))
+
+}}
+{shared{
+
+type editor =
+  (Eliom_content.Html5.D.div * (bus_message * bus_message) Eliom_bus.t)
+
+}}
+
+{server{
+
+let create _ =
+  let patches_bus = Eliom_bus.create
+      ~scope:Eliom_common.site_scope Json.t<bus_message>
+  in
+  let elt = Eliom_content.Html5.D.div ~a:
+      [a_contenteditable true;
+       a_onload onload] in
+  (elt, patches_bus)
+
+let init_and_register (elt, bus) eref =
+  let append_shadowcopy, get_shadowcopy =
+    let get = Eliom_reference.get in
+    ((fun elm -> get eref
+       >>= fun shdwcopies -> Eliom_reference.set eref (elm::shdwcopies)),
+     (fun () -> get eref)) in
+
+  let handler = handle_patch_request get_shadowcopy append_shadowcopy bus in
+  Eliom_registration.Ocaml.register
+    ~service:service_send_patch
+    (fun () patch ->
+       handler patch);
+
+  let get_document name = get_shadowcopy ()
+    >>= fun scopies ->
+    match scopies with
+    | [] -> Lwt.return `NotConnected
+    | {id = id; text = scopy}::xs -> Lwt.return (`Result (scopy, id)) in
+
+  Eliom_registration.Ocaml.register
+    ~service:Services.service_get_document
+    (fun () () -> get_document ())
 
 }}
