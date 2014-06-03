@@ -146,7 +146,7 @@ type phase =
 
 
 let load_document editor old rev =
-  Eliom_client.call_ocaml_service ~service:%service_get_document "toto" ()
+  Eliom_client.call_ocaml_service ~service:%service_get_document () ()
   >>= fun response ->
   begin
     match response with
@@ -245,7 +245,7 @@ let onload patches_bus =
           ()
           end
         with
-        | _ -> print_diffs diff; Eliom_lib.debug "EXN ! id = %d\nprev = %d\n current_rev = %d" id prev !rev
+        | _ -> Eliom_lib.debug "EXN ! id = %d\nprev = %d\n current_rev = %d" id prev !rev
       end
     | _ -> ()
   )
@@ -276,7 +276,7 @@ let onload patches_bus =
 {shared{
 
 type editor =
-  (Eliom_content.Html5.D.div * (bus_message * bus_message) Eliom_bus.t)
+  (Html5_types.div Eliom_content.Html5.elt * (bus_message, bus_message) Eliom_bus.t)
 
 }}
 
@@ -288,7 +288,7 @@ let create _ =
   in
   let elt = Eliom_content.Html5.D.div ~a:
       [a_contenteditable true;
-       a_onload onload] in
+       a_onload {Dom_html.event Js.t -> unit {fun _ -> onload %patches_bus}}] in
   (elt, patches_bus)
 
 let init_and_register (elt, bus) eref =
@@ -311,7 +311,7 @@ let init_and_register (elt, bus) eref =
     | {id = id; text = scopy}::xs -> Lwt.return (`Result (scopy, id)) in
 
   Eliom_registration.Ocaml.register
-    ~service:Services.service_get_document
+    ~service:service_get_document
     (fun () () -> get_document ())
 
 }}
