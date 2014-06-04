@@ -164,9 +164,6 @@ let make_diff text old_text rev client_id =
   {from_revision = rev; diffs = (Array.to_list diff); client = client_id;}
 
 
-let get_editor _ = Js.Opt.get (Html.document##getElementById
-                                 (Js.string "editor")) (fun () -> assert false)
-
 let apply_patches rev editor shadow_copy patches =
   List.iter (fun (id, diff, prev) ->
       if prev = !rev then
@@ -180,10 +177,11 @@ let apply_patches rev editor shadow_copy patches =
         rev := prev) (List.rev patches)
 
 
-let onload patches_bus =
+let onload patches_bus editor_elt () =
   Random.self_init ();
 
   (* Is the current revision server-side *)
+  let editor = Eliom_content.Html5.To_dom.of_div editor_elt in
   let shadow_copy = ref (Js.string "") in
   (* Is the revision number of this client *)
   let rev = ref 0 in
@@ -195,14 +193,6 @@ let onload patches_bus =
     | Ok _ -> true
     | _ -> false in
   let d = Html.document in
-
-  let body =
-    Js.Opt.get (d##getElementById (Js.string "editor"))
-      (fun () -> assert false) in
-  let editor = Html.createDiv d in
-
-  Dom.appendChild body editor;
-  (* get document content *)
 
 
   Lwt.async (fun _ -> Lwt_stream.iter
@@ -224,7 +214,6 @@ let onload patches_bus =
         try
           begin
         if id != client_id && is_ok () then
-          let editor = get_editor () in
           let dmp = DiffMatchPatch.make () in
           let patch_scopy = DiffMatchPatch.patch_make dmp
               (Js.to_string !shadow_copy) diff in
@@ -259,7 +248,6 @@ let onload patches_bus =
         inputs Dom_html.document
           (fun ev _ ->
              Lwt_js.sleep 0.3 >>= fun () ->
-             let editor = get_editor () in
              let diff = make_diff (Js.to_string editor##innerHTML)
                  (Js.to_string !shadow_copy) !rev client_id in
              Eliom_client.call_ocaml_service ~service:%service_send_patch () diff
@@ -280,18 +268,18 @@ type editor =
 
 }}
 
+
 {server{
 
 let create _ =
   let patches_bus = Eliom_bus.create
       ~scope:Eliom_common.site_scope Json.t<bus_message>
   in
-  let elt = Eliom_content.Html5.D.div ~a:
-      [a_contenteditable true;
-       a_onload {Dom_html.event Js.t -> unit {fun _ -> onload %patches_bus}}] in
+  let rec elt = Eliom_content.Html5.D.div ~a:
+      [a_contenteditable true] [] in
   (elt, patches_bus)
 
-let init_and_register (elt, bus) eref =
+let init_and_register ((elt, bus) : editor) eref =
   let append_shadowcopy, get_shadowcopy =
     let get = Eliom_reference.get in
     ((fun elm -> get eref
@@ -312,6 +300,11 @@ let init_and_register (elt, bus) eref =
 
   Eliom_registration.Ocaml.register
     ~service:service_get_document
-    (fun () () -> get_document ())
+    (fun () () -> get_document ());
+  {unit{
+      Eliom_client.onload (onload %bus %elt)
+  }}
+
+let get_elt (elt, _) = elt
 
 }}
