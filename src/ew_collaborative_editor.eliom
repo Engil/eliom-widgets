@@ -275,7 +275,7 @@ let create _ =
   let patches_bus = Eliom_bus.create
       ~scope:Eliom_common.site_scope Json.t<bus_message>
   in
-  let rec elt = Eliom_content.Html5.D.div ~a:
+  let elt = Eliom_content.Html5.D.div ~a:
       [a_contenteditable true] [] in
   (elt, patches_bus)
 
@@ -300,9 +300,10 @@ let init_and_register ((elt, bus) : editor) eref =
 
   Eliom_registration.Ocaml.register
     ~service:service_get_document
-    (fun () () -> get_document ());
-  {unit{
-      Eliom_client.onload (onload %bus %elt)
+    (fun () () ->
+  get_document ());
+  ignore {unit{
+      ignore (Lwt_js.sleep 1.0 >>= (fun () -> Lwt.return (onload %bus %elt ())))
   }}
 
 let get_elt (elt, _) = elt
