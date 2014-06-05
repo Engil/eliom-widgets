@@ -268,6 +268,8 @@ let onload patches_bus editor_elt () =
     (fun () ->
         inputs Dom_html.document
           (fun ev _ ->
+             Lwt_js.sleep 0.3
+             >>= fun () ->
              let diff = make_diff (Js.to_string editor##innerHTML)
                  (Js.to_string !shadow_copy) !rev client_id in
              Eliom_client.call_ocaml_service ~service:%service_send_patch () diff
