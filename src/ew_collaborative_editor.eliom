@@ -27,7 +27,9 @@ type response =
   | Applied of int
   | Rejected of (int * string) array list
 
-type revision = {id : int; text : string }
+type doc = {id : int; text : string }
+
+let new_document text = {id = 0; text = text}
 
 let insert_at text str id =
   try
@@ -95,7 +97,7 @@ let apply_diffs text diffs =
 
 
 let handle_patch_request get_copy append_copy bus (request : request) =
-  let verify_patch cscopy oscopies =
+  let verify_patch cscopy =
     let cid, ctext = cscopy.id, cscopy.text in
     let rid, rdiffs, ruid = request.from_revision, request.diffs, request.client in
     match apply_diffs ctext request.diffs with
@@ -111,10 +113,8 @@ let handle_patch_request get_copy append_copy bus (request : request) =
       else begin Lwt.return (`Refused (cid, ctext)) end
   in
   get_copy ()
-  >>= fun scopies ->
-  match scopies with
-  | [] -> Lwt.return (`Refused (0, ""))
-  | x::xs -> verify_patch x xs
+  >>= fun scopy ->
+  verify_patch scopy
 
 let service_get_document =
   Eliom_service.Ocaml.coservice'
@@ -141,7 +141,7 @@ open Dom
 
 type phase =
   | Init of (int * diff * int) list
-  | Ok of (int * diff * int) list
+  | Ok
   | Disconnected
 
 
@@ -153,8 +153,8 @@ let load_document editor old rev =
     | `Result (document, id) ->
       editor##innerHTML <- (Js.string document);
       old := (Js.string document);
-      rev := id; Lwt.return_unit
-    | `NotConnected -> Lwt.return_unit
+      rev := id; Lwt.return Ok
+    | `NotConnected -> Lwt.return Disconnected
   end
 
 
@@ -174,7 +174,7 @@ let apply_patches rev editor shadow_copy patches =
             dmp patch_editor (Js.to_string editor##innerHTML);
         shadow_copy := Js.string @@ DiffMatchPatch.patch_apply
             dmp patch_scopy (Js.to_string !shadow_copy);
-        rev := prev) (List.rev patches)
+       rev := prev) (List.rev patches)
 
 
 let onload patches_bus editor_elt () =
@@ -187,13 +187,11 @@ let onload patches_bus editor_elt () =
   let rev = ref 0 in
   (* this client id *)
   let client_id = Random.int 4096 in
-
   let phase = ref (Init []) in
-  let is_ok _ = match !phase with
-    | Ok _ -> true
-    | _ -> false in
-  let d = Html.document in
 
+  let is_ok _ = match !phase with
+    | Ok -> true
+    | _ -> false in
 
   Lwt.async (fun _ -> Lwt_stream.iter
   (function
@@ -203,9 +201,12 @@ let onload patches_bus editor_elt () =
         begin
           match !phase with (* if its ours, then, go into the Ok phase
                                and start loading the document *)
-          | Init msg_buffer -> begin
-              load_document editor shadow_copy rev;
-              phase := Ok [] end
+          | Init msg_buffer -> ignore begin
+              load_document editor shadow_copy rev
+              >>= function
+              | Ok -> Lwt.return (phase := Ok)
+              | _ -> Lwt.return (phase := Disconnected)
+            end
           | _ -> ()
         end
       else ()
@@ -234,12 +235,12 @@ let onload patches_bus editor_elt () =
           ()
           end
         with
-        | _ -> Eliom_lib.debug "EXN ! id = %d\nprev = %d\n current_rev = %d" id prev !rev
+        | _ -> ()
       end
     | _ -> ()
   )
   (Eliom_bus.stream patches_bus));
-  Eliom_bus.write patches_bus (Hello (client_id));
+  ignore(Eliom_bus.write patches_bus (Hello (client_id)));
 
   (* changes handler *)
   Lwt_js_events.(
@@ -247,7 +248,6 @@ let onload patches_bus editor_elt () =
     (fun () ->
         inputs Dom_html.document
           (fun ev _ ->
-             Lwt_js.sleep 0.3 >>= fun () ->
              let diff = make_diff (Js.to_string editor##innerHTML)
                  (Js.to_string !shadow_copy) !rev client_id in
              Eliom_client.call_ocaml_service ~service:%service_send_patch () diff
@@ -263,7 +263,7 @@ let onload patches_bus editor_elt () =
 }}
 {shared{
 
-type editor =
+type t =
   (Html5_types.div Eliom_content.Html5.elt * (bus_message, bus_message) Eliom_bus.t)
 
 }}
@@ -279,12 +279,10 @@ let create _ =
       [a_contenteditable true] [] in
   (elt, patches_bus)
 
-let init_and_register ((elt, bus) : editor) eref =
+let init_and_register ((elt, bus): t) eref =
   let append_shadowcopy, get_shadowcopy =
-    let get = Eliom_reference.get in
-    ((fun elm -> get eref
-       >>= fun shdwcopies -> Eliom_reference.set eref (elm::shdwcopies)),
-     (fun () -> get eref)) in
+    ((fun elm -> Eliom_reference.set eref elm),
+     (fun () -> Eliom_reference.get eref)) in
 
   let handler = handle_patch_request get_shadowcopy append_shadowcopy bus in
   Eliom_registration.Ocaml.register
@@ -293,18 +291,17 @@ let init_and_register ((elt, bus) : editor) eref =
        handler patch);
 
   let get_document name = get_shadowcopy ()
-    >>= fun scopies ->
-    match scopies with
-    | [] -> Lwt.return `NotConnected
-    | {id = id; text = scopy}::xs -> Lwt.return (`Result (scopy, id)) in
+    >>= fun {id = id; text = scopy} ->
+    Lwt.return (`Result (scopy, id)) in
 
   Eliom_registration.Ocaml.register
     ~service:service_get_document
     (fun () () ->
   get_document ());
-  ignore {unit{
-      ignore (Lwt_js.sleep 1.0 >>= (fun () -> Lwt.return (onload %bus %elt ())))
-  }}
+  ignore {unit Lwt.t{
+      Lwt_js.sleep 0.3 >>= (fun () -> Lwt.return (onload %bus %elt ()))
+  }};
+  Lwt.return_unit
 
 let get_elt (elt, _) = elt
 
