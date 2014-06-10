@@ -3,7 +3,7 @@
 #           SETTINGS FOR YOUR PACKAGE
 #----------------------------------------------------------------------
 
-# Package name for your 
+# Package name for your
 PKG_NAME := eliom-widgets
 PKG_VERS := your version
 PKG_DESC := your description

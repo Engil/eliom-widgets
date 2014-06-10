@@ -183,6 +183,68 @@ let make_diff text old_text rev client_id =
   let diff = DiffMatchPatch.diff_main dmp old_text text in
   {from_revision = rev; diffs = (Array.to_list diff); client = client_id;}
 
+let saveSelection elt =
+  let sel = Dom_html.window##getSelection () in
+  let range = sel##getRangeAt(0) in
+  let pre_range = range##cloneRange () in
+  pre_range##selectNodeContents(elt);
+  pre_range##setEnd(range##startContainer, range##startOffset);
+  let start = (pre_range##toString())##length in
+  (start, start + (range##toString())##length)
+
+exception Not_text
+
+let get_length node =
+  try
+    (Js.Opt.get (Dom.CoerceTo.text node) (fun () -> raise Not_text ))##length
+  with
+  | Not_text -> 0
+
+let restoreSelection containerEl (start, ends) =
+    let charIndex = ref 0 in
+    let range = Dom_html.document##createRange() in
+    range##setStart(containerEl, 0);
+    range##collapse(Js._true);
+    let nodeStack = Stack.create () in
+    let foundStart = ref false in
+    let stop = ref false in
+    let rec inner stack node =
+      if not !stop then
+        let next_node = try Stack.pop stack with | Stack.Empty -> stop := true; node in
+        if node##nodeType = Dom.TEXT
+        then
+          begin
+            let next_index = !charIndex + (get_length node) in
+            if not !foundStart && (start >= !charIndex) && (start <= next_index) then
+            begin
+              range##setStart(node, start - !charIndex);
+              foundStart := true
+            end
+          else ();
+          if (not !foundStart) && (ends >= !charIndex) && (ends <= next_index) then
+            begin
+              range##setEnd(node, ends - !charIndex);
+              stop := true
+            end
+          else ();
+          inner stack next_node
+        end
+      else
+        begin
+          let max = node##childNodes##length in
+          for i = 0 to (max - 1) do
+            Stack.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
+          done;
+          inner stack next_node
+        end
+      else
+        begin
+          let sel = Dom_html.window##getSelection() in
+          sel##removeAllRanges();
+          sel##addRange(range)
+        end
+    in inner nodeStack containerEl
+
 
 let apply_patches rev editor shadow_copy patches =
   List.iter (fun (id, diff, prev) ->
@@ -196,6 +258,19 @@ let apply_patches rev editor shadow_copy patches =
             dmp patch_scopy (Js.to_string !shadow_copy);
        rev := prev) (List.rev patches)
 
+let apply_update rev editor shadow_copy diff prev =
+  let dmp = DiffMatchPatch.make () in
+  let patch_scopy = DiffMatchPatch.patch_make dmp
+      (Js.to_string !shadow_copy) diff in
+  let patch_editor = DiffMatchPatch.patch_make dmp
+      (Js.to_string editor##innerHTML) diff in
+  let saved = saveSelection (editor :> Dom.node Js.t) in
+  editor##innerHTML <- Js.string @@ DiffMatchPatch.patch_apply
+      dmp patch_editor (Js.to_string editor##innerHTML);
+  shadow_copy := Js.string @@ DiffMatchPatch.patch_apply
+      dmp patch_scopy (Js.to_string !shadow_copy);
+  rev := prev;
+  restoreSelection (editor :> Dom.node Js.t) saved
 
 let onload patches_bus editor_elt () =
   Random.self_init ();
@@ -234,25 +309,18 @@ let onload patches_bus editor_elt () =
       begin
         try
           begin
-        if id != client_id && is_ok () then
-          let dmp = DiffMatchPatch.make () in
-          let patch_scopy = DiffMatchPatch.patch_make dmp
-              (Js.to_string !shadow_copy) diff in
-          let patch_editor = DiffMatchPatch.patch_make dmp
-              (Js.to_string editor##innerHTML) diff in
-          editor##innerHTML <- Js.string @@ DiffMatchPatch.patch_apply
-              dmp patch_editor (Js.to_string editor##innerHTML);
-          shadow_copy := Js.string @@ DiffMatchPatch.patch_apply
-              dmp patch_scopy (Js.to_string !shadow_copy);
-          rev := prev
-        else if id != client_id then
-          begin
-            match !phase with
-            | Init l -> phase := Init ((id, diff, prev)::l)
-            | _ -> ()
-          end
-        else
-          ()
+            if id != client_id && is_ok () then
+              begin
+                apply_update rev editor shadow_copy diff prev
+              end
+            else if id != client_id then
+              begin
+                match !phase with
+                | Init l -> phase := Init ((id, diff, prev)::l)
+                | _ -> ()
+              end
+            else
+              ()
           end
         with
         | _ -> ()
