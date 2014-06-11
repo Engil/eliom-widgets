@@ -201,33 +201,29 @@ let get_length node =
   | Not_text -> 0
 
 let restoreSelection containerEl (start, ends) =
-    let charIndex = ref 0 in
-    let range = Dom_html.document##createRange() in
-    range##setStart(containerEl, 0);
-    range##collapse(Js._true);
-    let nodeStack = Stack.create () in
-    let foundStart = ref false in
-    let stop = ref false in
-    let rec inner stack node =
-      if not !stop then
-        let next_node = try Stack.pop stack with | Stack.Empty -> stop := true; node in
-        if node##nodeType = Dom.TEXT
-        then
-          begin
-            let next_index = !charIndex + (get_length node) in
-            if not !foundStart && (start >= !charIndex) && (start <= next_index) then
+  let charIndex = ref 0 in
+  let range = Dom_html.document##createRange() in
+  range##setStart(containerEl, 0);
+  range##collapse(Js._true);
+  let nodeStack = Stack.create () in
+  let foundStart = ref false in
+  let stop = ref false in
+  let rec inner stack node =
+    if not !stop then
+      if node##nodeType = Dom.TEXT
+      then
+        begin
+          let next_index = !charIndex + (get_length node) in
+          if not !foundStart && (start >= !charIndex) && (start <= next_index) then
             begin
               range##setStart(node, start - !charIndex);
               foundStart := true
-            end
-          else ();
+            end;
           if (not !foundStart) && (ends >= !charIndex) && (ends <= next_index) then
             begin
               range##setEnd(node, ends - !charIndex);
               stop := true
             end
-          else ();
-          inner stack next_node
         end
       else
         begin
@@ -235,15 +231,13 @@ let restoreSelection containerEl (start, ends) =
           for i = 0 to (max - 1) do
             Stack.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
           done;
-          inner stack next_node
-        end
-      else
-        begin
-          let sel = Dom_html.window##getSelection() in
-          sel##removeAllRanges();
-          sel##addRange(range)
-        end
-    in inner nodeStack containerEl
+        end;
+    try inner stack (Stack.pop stack) with Stack.Empty -> ()
+  in
+  inner nodeStack containerEl;
+  let sel = Dom_html.window##getSelection() in
+  sel##removeAllRanges();
+  sel##addRange(range)
 
 
 let apply_patches rev editor shadow_copy patches =
@@ -360,6 +354,7 @@ type t =
 
 
 {server{
+
 
 let create _ =
   let patches_bus = Eliom_bus.create
