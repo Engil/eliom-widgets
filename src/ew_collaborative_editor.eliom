@@ -219,7 +219,7 @@ let restoreSelection containerEl (start, ends) =
               range##setStart(node, start - !charIndex);
               foundStart := true
             end;
-          if (not !foundStart) && (ends >= !charIndex) && (ends <= next_index) then
+          if !foundStart && (ends >= !charIndex) && (ends <= next_index) then
             begin
               range##setEnd(node, ends - !charIndex);
               stop := true
