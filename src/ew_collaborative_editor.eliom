@@ -40,8 +40,9 @@ type bus_message =
 
 {server{
 
-type patch_result = Failure of string
-                  | Success of string
+type patch_result =
+  | Failure of string
+  | Success of string
 
 type response =
   | Applied of int
@@ -183,76 +184,76 @@ let make_diff text old_text rev client_id =
   let diff = DiffMatchPatch.diff_main dmp old_text text in
   {from_revision = rev; diffs = (Array.to_list diff); client = client_id;}
 
-let saveSelection elt =
-  try
-    let sel = Dom_html.window##getSelection () in
-    let range = sel##getRangeAt(0) in
-    let pre_range = range##cloneRange () in
-    pre_range##selectNodeContents(elt);
-    pre_range##setEnd(range##startContainer, range##startOffset);
-    let start = (pre_range##toString())##length in
-    (start, start + (range##toString())##length)
-  with e -> 1,0
+(* Caret handling functions *)
+
+let save_selection elt =
+  let sel = Dom_html.window##getSelection () in
+  let range = sel##getRangeAt(0) in
+  let pre_range = range##cloneRange () in
+  pre_range##selectNodeContents(elt);
+  pre_range##setEnd(range##startContainer, range##startOffset);
+  let start = (pre_range##toString())##length in
+  (start, start + (range##toString())##length)
 
 exception Not_text
 
 let get_length node =
   try
-    (Js.Opt.get (Dom.CoerceTo.text node) (fun () -> raise Not_text ))##length
-  with
-  | Not_text -> 0
+    (Js.Opt.get (Dom.CoerceTo.text node) (fun () -> raise Not_text))##length
+  with Not_text -> 0
 
-let getText elt =
-  let str = ref "" in
-  let nodeStack = Queue.create () in
-  let rec inner stack node =
+(* Function used to get the whole text without markup *)
+let get_text elt =
+  let text = ref "" in
+  let queue = Queue.create () in
+  let rec inner queue node =
     if node##nodeType = Dom.TEXT
     then
-      str := !str ^ (Js.to_string node##nodeValue);
-    let max = node##childNodes##length in
-    for i = 0 to (max - 1) do
-      Queue.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
+      text := !text ^ (Js.to_string node##nodeValue);
+    let len = node##childNodes##length in
+    for i = 0 to (len - 1) do
+      Queue.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) queue
     done;
-    try inner stack (Queue.pop stack) with Queue.Empty -> () in
-  inner nodeStack elt;
-  !str
+    try inner queue (Queue.pop queue) with Queue.Empty -> () in
+  inner queue elt;
+  !text
 
-let restoreSelection containerEl (start, ends) =
-  let charIndex = ref 0 in
+let restore_selection elt (startpoint, endpoint) =
+  let char_index = ref 0 in
   let range = Dom_html.document##createRange() in
-  range##setStart(containerEl, 0);
+  range##setStart(elt, 0);
   range##collapse(Js._true);
-  let nodeStack = Queue.create () in
-  let foundStart = ref false in
+  let queue = Queue.create () in
+  let foundstart = ref false in
   let stop = ref false in
-  let rec inner stack node =
+  let rec inner queue node =
     if not !stop then
       if node##nodeType = Dom.TEXT
       then
         begin
-          let next_index = !charIndex + (get_length node) in
-          if not !foundStart && (start >= !charIndex) && (start <= next_index) then
+          let next_index = !char_index + (get_length node) in
+          if not !foundstart && (startpoint >= !char_index) && (startpoint <= next_index) then
             begin
-              range##setStart(node, start - !charIndex);
-              foundStart := true
+              range##setStart(node, startpoint - !char_index);
+              foundstart := true
             end;
-          if !foundStart && (ends >= !charIndex) && (ends <= next_index) then
+          if !foundstart && (endpoint >= !char_index) && (endpoint <= next_index) then
             begin
-              range##setEnd(node, ends - !charIndex);
+              range##setEnd(node, endpoint - !char_index);
               stop := true
             end;
-          charIndex := next_index
+          char_index := next_index
         end
       else
         begin
           let max = node##childNodes##length in
           for i = 0 to (max - 1) do
-            Queue.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
+            Queue.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) queue
           done;
         end;
-      try inner stack (Queue.pop stack) with Queue.Empty -> ()
+      try inner queue (Queue.pop queue) with Queue.Empty -> ()
   in
-  inner nodeStack containerEl;
+  inner queue elt;
   let sel = Dom_html.window##getSelection() in
   sel##removeAllRanges();
   sel##addRange(range)
@@ -275,13 +276,13 @@ let apply_update rev editor shadow_copy diff prev =
       (Js.to_string !shadow_copy) diff in
   let patch_editor = DiffMatchPatch.patch_make dmp
       (Js.to_string editor##innerHTML) diff in
-  let saved = saveSelection (editor :> Dom.node Js.t) in
+  let saved = save_selection (editor :> Dom.node Js.t) in
   editor##innerHTML <- Js.string @@ DiffMatchPatch.patch_apply
       dmp patch_editor (Js.to_string editor##innerHTML);
   shadow_copy := Js.string @@ DiffMatchPatch.patch_apply
       dmp patch_scopy (Js.to_string !shadow_copy);
   rev := prev;
-  restoreSelection (editor :> Dom.node Js.t) saved
+  restore_selection (editor :> Dom.node Js.t) saved
 
 let onload patches_bus editor_elt () =
   Random.self_init ();
