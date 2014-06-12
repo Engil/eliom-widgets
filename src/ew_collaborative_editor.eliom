@@ -184,13 +184,15 @@ let make_diff text old_text rev client_id =
   {from_revision = rev; diffs = (Array.to_list diff); client = client_id;}
 
 let saveSelection elt =
-  let sel = Dom_html.window##getSelection () in
-  let range = sel##getRangeAt(0) in
-  let pre_range = range##cloneRange () in
-  pre_range##selectNodeContents(elt);
-  pre_range##setEnd(range##startContainer, range##startOffset);
-  let start = (pre_range##toString())##length in
-  (start, start + (range##toString())##length)
+  try
+    let sel = Dom_html.window##getSelection () in
+    let range = sel##getRangeAt(0) in
+    let pre_range = range##cloneRange () in
+    pre_range##selectNodeContents(elt);
+    pre_range##setEnd(range##startContainer, range##startOffset);
+    let start = (pre_range##toString())##length in
+    (start, start + (range##toString())##length)
+  with e -> 1,0
 
 exception Not_text
 
@@ -200,12 +202,27 @@ let get_length node =
   with
   | Not_text -> 0
 
+let getText elt =
+  let str = ref "" in
+  let nodeStack = Queue.create () in
+  let rec inner stack node =
+    if node##nodeType = Dom.TEXT
+    then
+      str := !str ^ (Js.to_string node##nodeValue);
+    let max = node##childNodes##length in
+    for i = 0 to (max - 1) do
+      Queue.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
+    done;
+    try inner stack (Queue.pop stack) with Queue.Empty -> () in
+  inner nodeStack elt;
+  !str
+
 let restoreSelection containerEl (start, ends) =
   let charIndex = ref 0 in
   let range = Dom_html.document##createRange() in
   range##setStart(containerEl, 0);
   range##collapse(Js._true);
-  let nodeStack = Stack.create () in
+  let nodeStack = Queue.create () in
   let foundStart = ref false in
   let stop = ref false in
   let rec inner stack node =
@@ -223,22 +240,22 @@ let restoreSelection containerEl (start, ends) =
             begin
               range##setEnd(node, ends - !charIndex);
               stop := true
-            end
+            end;
+          charIndex := next_index
         end
       else
         begin
           let max = node##childNodes##length in
           for i = 0 to (max - 1) do
-            Stack.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
+            Queue.push (Js.Opt.get (node##childNodes##item (i)) (fun () -> assert false)) stack
           done;
         end;
-    try inner stack (Stack.pop stack) with Stack.Empty -> ()
+      try inner stack (Queue.pop stack) with Queue.Empty -> ()
   in
   inner nodeStack containerEl;
   let sel = Dom_html.window##getSelection() in
   sel##removeAllRanges();
   sel##addRange(range)
-
 
 let apply_patches rev editor shadow_copy patches =
   List.iter (fun (id, diff, prev) ->
